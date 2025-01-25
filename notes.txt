@@ -1,0 +1,9 @@
+benign traffic represents the immense majority of this dataset.
+brute-force attacks and ping scans have very few samples in comparison. 
+
+
+
+duration distribution, number of packets, and number of bytes.
+We can see that most values are close to zero, but there is also a long tail of rare values stretching along
+the x axes. We will use a power transform to make these features more Gaussian-like, which should
+help the model during training
