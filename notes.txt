@@ -7,3 +7,139 @@ duration distribution, number of packets, and number of bytes.
 We can see that most values are close to zero, but there is also a long tail of rare values stretching along
 the x axes. We will use a power transform to make these features more Gaussian-like, which should
 help the model during training
+
+#peprocessing
+In the last section, we identified some issues with the dataset we need to address to improve the
+accuracy of our model.
+
+CIDDS-001 dataset includes diverse types of data: we have numerical values such as duration,
+categorical features such as protocols (TCP, UDP, ICMP, and IGMP), and others such as timestamps
+or IP addresses. 
+-One hot encode
+
+
+Another important type of information we can get using timestamps is the time of day. We
+also normalize it between 0 and 1:
+
+
+TCP flags Each flag indicates a particular state during a TCP
+connection. For example, F or FIN signifies that the TCP peer has finished sending data. We
+can extract each flag, and one-hot-encode them as follows:
+
+Let’s now process the IP addresses. In this example, we will use binary encoding. Instead of
+taking 32 bits to encode the complete IPv4 address, we will only keep the last 16 bits, which are
+the most significant here. Indeed, the 16 first bits either correspond to 192.168 if the host
+belongs to the internal network or another value if it’s external:
+
+
+There is an issue with the ‘Bytes’ feature: millions are represented as m instead of a numerical
+value. We can fix it by multiplying the numerical part of these non-numerical values by one million:
+
+
+The last features we need to encode are the easiest ones: categorical features such as protocols
+and attack types. We use the get_dummies() function from pandas:
+
+
+We create a train/validation/test split with 80/10/10 ratios:
+
+
+Finally, we need to address the scaling of three features: duration, the number of packets, and
+the number of bytes. We use PowerTransformer() from scikit-learn to modify
+their distributions:
+
+the dataset we processed is purely tabular. We still need to convert it into a graph dataset
+before we can feed it to a GNN.
+
+
+Ideally, flows between the same computers should be connected. This can be achieved
+using a heterogeneous graph with two types of nodes:
+•
+•
+Hosts, which correspond to computers and use IP addresses as features. If we had more
+information, we could add other computer-related features, such as logs or CPU utilization.
+Flows, which correspond to connections between two hosts. They consider all the other features
+from the dataset. They also have the label we want to predict (a benign or malicious flow).
+
+
+flows are unidirectional, which is why we also define two types of edges: host-to-flow
+(source), and flow-to-host (destination). A single graph would require too much memory, so we will
+divide it into subgraphs and place them into data loaders:
+
+
+We define the function that will create our data loaders. It takes two parameters: the tabular
+DataFrame we created, and the subgraph size (1024 nodes in this example):
+
+We initialize a list called data to store our subgraphs, and we count the number of subgraphs
+we will create
+
+
+For each subgraph, we retrieve the corresponding samples in the DataFrame, the list of source
+IP addresses, and the list of destination IP addresses:
+
+
+We create a dictionary that maps the IP addresses to a node index:
+
+
+This dictionary will help us to create the edge index from the host to the flow and vice versa.
+We use a function called get_connections(), which we will create after this one.
+
+
+We will implement three layers of SAGEConv with LeakyRELU for each node type. Finally, a linear
+layer will output a five-dimensional vector, where each dimension corresponds to a class. Furthermore,
+we will train this model in a supervised way using the cross-entropy loss and the Adam optimizer:
+
+
+We define the heterogeneous GNN with three parameters: the number of hidden dimensions,
+the number of output dimensions, and the number of layers:
+
+
+We define a heterogenous version of the GraphSAGE operator for each layer and edge type.
+Here, we could apply a different GNN layer to each edge type, such as GCNConv or GATConv.
+The HeteroConv() wrapper manages the messages between layers,
+
+We define a linear layer that will output the final classification:
+
+We create the forward() method, which computes embeddings for host and flow nodes
+(stored in the x_dict dictionary). The flow embeddings are then used to predict a class:
+
+
+We instantiate the heterogeneous GNN with 64 hidden dimensions, 5 outputs (our 5 classes),
+and 3 layers. If available, we place it on a GPU and create an Adam optimizer with a learning
+rate of 0.001:
+
+
+We define the test() function and create arrays to store predictions and true labels. We also
+want to count the number of subgraphs and the total loss, so we create the corresponding variables:
+
+
+We get the model’s prediction for each batch and compute the cross-entropy loss:
+
+
+We append the predicted class to the list of predictions and do the same with the true labels:
+
+We create the training loop to train the model for 101 epochs:
+
+We instantiate the heterogeneous GNN with 64 hidden dimensions, 5 outputs (our 5 classes),
+and 3 layers. If available, we place it on a GPU and create an Adam optimizer with a learning
+rate of 0.001:
+
+Now that the batch loop is over, we compute the F1 score (macro) using the prediction and
+true label lists. The macro-averaged F1 score is a good metric in this imbalanced learning
+setting because it treats all classes equally regardless of the number of samples:
+
+The approach we adopted would be even more relevant if we could access more host-related features,
+but it shows how you can expand it to fit your needs. The other main advantage of GNNs is their
+ability to process large amounts of data. This approach makes even more sense when dealing with
+millions of flows. To finish this project
+
+
+If we compare this pie chart to the original proportions in the dataset, we see that the model performs
+better for the majority classes. This is not surprising since minority classes are harder to learn (fewer
+samples), and not detecting them is less penalizing (with 700,000 benign flows versus 336 ping scans).
+Port and ping scan detection could be improved with techniques such as oversampling and introducing
+class weights during training.
+
+
+This confusion matrix displays interesting results, such as a bias toward the benign class or errors
+between ping and port scans. These errors can be attributed to the similarity between these attacks.
+Engineering additional features could help the model distinguish these classes
